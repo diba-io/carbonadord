@@ -1,13 +1,13 @@
 use super::*;
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Default, DeserializeFromStr, SerializeDisplay)]
 pub struct Decimal {
   value: u128,
   scale: u8,
 }
 
 impl Decimal {
-  pub(crate) fn to_amount(self, divisibility: u8) -> Result<u128> {
+  pub fn to_amount(self, divisibility: u8) -> Result<u128> {
     match divisibility.checked_sub(self.scale) {
       Some(difference) => Ok(
         self
@@ -82,24 +82,6 @@ impl FromStr for Decimal {
         scale: 0,
       })
     }
-  }
-}
-
-impl Serialize for Decimal {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    serializer.collect_str(self)
-  }
-}
-
-impl<'de> Deserialize<'de> for Decimal {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: Deserializer<'de>,
-  {
-    DeserializeFromStr::with(deserializer)
   }
 }
 
@@ -196,6 +178,7 @@ mod tests {
       assert_eq!(decimal, string.parse::<Decimal>().unwrap());
     }
 
+    case(Decimal { value: 0, scale: 0 }, "0");
     case(Decimal { value: 1, scale: 0 }, "1");
     case(Decimal { value: 1, scale: 1 }, "0.1");
     case(

@@ -36,11 +36,33 @@ pub struct RuneEntry {
   pub mint: Option<MintEntry>,
   pub mints: u64,
   pub number: u64,
-  pub rune: Rune,
-  pub spacers: u32,
+  pub premine: u128,
+  pub spaced_rune: SpacedRune,
   pub supply: u128,
   pub symbol: Option<char>,
   pub timestamp: u32,
+}
+
+impl RuneEntry {
+  pub fn mintable(&self, block_height: Height, block_time: u32) -> Result<u128, MintError> {
+    let Some(mint) = self.mint else {
+      return Err(MintError::Unmintable(self.spaced_rune.rune));
+    };
+
+    if let Some(end) = mint.end {
+      if block_height.0 >= end {
+        return Err(MintError::End((self.spaced_rune.rune, end)));
+      }
+    }
+
+    if let Some(deadline) = mint.deadline {
+      if block_time >= deadline {
+        return Err(MintError::Deadline((self.spaced_rune.rune, deadline)));
+      }
+    }
+
+    Ok(mint.limit.unwrap_or(runes::MAX_LIMIT))
+  }
 }
 
 pub(super) type RuneEntryValue = (
@@ -50,8 +72,8 @@ pub(super) type RuneEntryValue = (
   Option<MintEntryValue>, // mint parameters
   u64,                    // mints
   u64,                    // number
-  u128,                   // rune
-  u32,                    // spacers
+  u128,                   // premine
+  (u128, u32),            // spaced rune
   u128,                   // supply
   Option<char>,           // symbol
   u32,                    // timestamp
@@ -59,9 +81,9 @@ pub(super) type RuneEntryValue = (
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize, Default)]
 pub struct MintEntry {
-  pub deadline: Option<u32>,
-  pub end: Option<u32>,
-  pub limit: Option<u128>,
+  pub deadline: Option<u32>, // unix timestamp
+  pub end: Option<u32>,      // block height
+  pub limit: Option<u128>,   // claim amount
 }
 
 type MintEntryValue = (
@@ -69,15 +91,6 @@ type MintEntryValue = (
   Option<u32>,  // end
   Option<u128>, // limit
 );
-
-impl RuneEntry {
-  pub(crate) fn spaced_rune(&self) -> SpacedRune {
-    SpacedRune {
-      rune: self.rune,
-      spacers: self.spacers,
-    }
-  }
-}
 
 impl Default for RuneEntry {
   fn default() -> Self {
@@ -88,8 +101,8 @@ impl Default for RuneEntry {
       mint: None,
       mints: 0,
       number: 0,
-      rune: Rune(0),
-      spacers: 0,
+      premine: 0,
+      spaced_rune: SpacedRune::default(),
       supply: 0,
       symbol: None,
       timestamp: 0,
@@ -108,8 +121,8 @@ impl Entry for RuneEntry {
       mint,
       mints,
       number,
-      rune,
-      spacers,
+      premine,
+      (rune, spacers),
       supply,
       symbol,
       timestamp,
@@ -135,8 +148,11 @@ impl Entry for RuneEntry {
       }),
       mints,
       number,
-      rune: Rune(rune),
-      spacers,
+      premine,
+      spaced_rune: SpacedRune {
+        rune: Rune(rune),
+        spacers,
+      },
       supply,
       symbol,
       timestamp,
@@ -169,8 +185,8 @@ impl Entry for RuneEntry {
       ),
       self.mints,
       self.number,
-      self.rune.0,
-      self.spacers,
+      self.premine,
+      (self.spaced_rune.rune.0, self.spaced_rune.spacers),
       self.supply,
       self.symbol,
       self.timestamp,
@@ -178,28 +194,28 @@ impl Entry for RuneEntry {
   }
 }
 
-pub(super) type RuneIdValue = (u32, u16);
+pub(super) type RuneIdValue = (u32, u32);
 
 impl Entry for RuneId {
   type Value = RuneIdValue;
 
-  fn load((height, index): Self::Value) -> Self {
-    Self { height, index }
+  fn load((block, tx): Self::Value) -> Self {
+    Self { block, tx }
   }
 
   fn store(self) -> Self::Value {
-    (self.height, self.index)
+    (self.block, self.tx)
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) struct InscriptionEntry {
   pub(crate) charms: u16,
   pub(crate) fee: u64,
   pub(crate) height: u32,
   pub(crate) id: InscriptionId,
   pub(crate) inscription_number: i32,
-  pub(crate) parent: Option<u32>,
+  pub(crate) parents: Vec<u32>,
   pub(crate) sat: Option<Sat>,
   pub(crate) sequence_number: u32,
   pub(crate) timestamp: u32,
@@ -211,7 +227,7 @@ pub(crate) type InscriptionEntryValue = (
   u32,                // height
   InscriptionIdValue, // inscription id
   i32,                // inscription number
-  Option<u32>,        // parent
+  Vec<u32>,           // parents
   Option<u64>,        // sat
   u32,                // sequence number
   u32,                // timestamp
@@ -228,7 +244,7 @@ impl Entry for InscriptionEntry {
       height,
       id,
       inscription_number,
-      parent,
+      parents,
       sat,
       sequence_number,
       timestamp,
@@ -240,7 +256,7 @@ impl Entry for InscriptionEntry {
       height,
       id: InscriptionId::load(id),
       inscription_number,
-      parent,
+      parents,
       sat: sat.map(Sat),
       sequence_number,
       timestamp,
@@ -254,7 +270,7 @@ impl Entry for InscriptionEntry {
       self.height,
       self.id.store(),
       self.inscription_number,
-      self.parent,
+      self.parents,
       self.sat.map(Sat::n),
       self.sequence_number,
       self.timestamp,
@@ -398,6 +414,30 @@ mod tests {
   use super::*;
 
   #[test]
+  fn inscription_entry() {
+    let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0"
+      .parse::<InscriptionId>()
+      .unwrap();
+
+    let entry = InscriptionEntry {
+      charms: 0,
+      fee: 1,
+      height: 2,
+      id,
+      inscription_number: 3,
+      parents: vec![4, 5, 6],
+      sat: Some(Sat(7)),
+      sequence_number: 8,
+      timestamp: 9,
+    };
+
+    let value = (0, 1, 2, id.store(), 3, vec![4, 5, 6], Some(7), 8, 9);
+
+    assert_eq!(entry.clone().store(), value);
+    assert_eq!(InscriptionEntry::load(value), entry);
+  }
+
+  #[test]
   fn inscription_id_entry() {
     let inscription_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0"
       .parse::<InscriptionId>()
@@ -458,8 +498,11 @@ mod tests {
       }),
       mints: 11,
       number: 6,
-      rune: Rune(7),
-      spacers: 8,
+      premine: 12,
+      spaced_rune: SpacedRune {
+        rune: Rune(7),
+        spacers: 8,
+      },
       supply: 9,
       symbol: Some('a'),
       timestamp: 10,
@@ -475,8 +518,8 @@ mod tests {
       Some((Some(2), Some(4), Some(5))),
       11,
       6,
-      7,
-      8,
+      12,
+      (7, 8),
       9,
       Some('a'),
       10,
@@ -488,22 +531,9 @@ mod tests {
 
   #[test]
   fn rune_id_entry() {
-    assert_eq!(
-      RuneId {
-        height: 1,
-        index: 2,
-      }
-      .store(),
-      (1, 2),
-    );
+    assert_eq!(RuneId { block: 1, tx: 2 }.store(), (1, 2),);
 
-    assert_eq!(
-      RuneId {
-        height: 1,
-        index: 2,
-      },
-      RuneId::load((1, 2)),
-    );
+    assert_eq!(RuneId { block: 1, tx: 2 }, RuneId::load((1, 2)),);
   }
 
   #[test]

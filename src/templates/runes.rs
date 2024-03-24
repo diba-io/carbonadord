@@ -20,13 +20,12 @@ mod tests {
     assert_eq!(
       RunesHtml {
         entries: vec![(
-          RuneId {
-            height: 0,
-            index: 0,
-          },
+          RuneId { block: 0, tx: 0 },
           RuneEntry {
-            rune: Rune(26),
-            spacers: 1,
+            spaced_rune: SpacedRune {
+              rune: Rune(26),
+              spacers: 1
+            },
             ..Default::default()
           }
         )],

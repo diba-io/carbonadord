@@ -90,7 +90,7 @@ Building
 On Debian and Ubuntu, `ord` requires `libssl-dev` when building from source:
 
 ```
-sudo apt-get install libssl-dev
+sudo apt-get install pkg-config libssl-dev
 ```
 
 You'll also need Rust:
@@ -99,11 +99,22 @@ You'll also need Rust:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-To build `ord` from source:
+Clone the `ord` repo:
 
 ```
 git clone https://github.com/ordinals/ord.git
 cd ord
+```
+
+To build a specific version of `ord`, first checkout that version:
+
+```
+git checkout <VERSION>
+```
+
+And finally to actually build `ord`:
+
+```
 cargo build --release
 ```
 
@@ -255,6 +266,7 @@ Release x.y.z
 
 - Bump version: x.y.z → x.y.z
 - Update changelog
+- Update changelog contributor credits
 - Update dependencies
 ```
 

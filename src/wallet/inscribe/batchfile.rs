@@ -1,16 +1,17 @@
 use super::*;
 
-#[derive(Deserialize, PartialEq, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Batchfile {
-  pub(crate) inscriptions: Vec<BatchEntry>,
-  pub(crate) mode: Mode,
-  pub(crate) parent: Option<InscriptionId>,
-  pub(crate) postage: Option<u64>,
+  pub inscriptions: Vec<BatchEntry>,
+  pub mode: Mode,
+  pub parent: Option<InscriptionId>,
+  pub postage: Option<u64>,
   #[serde(default)]
-  pub(crate) reinscribe: bool,
-  pub(crate) sat: Option<Sat>,
-  pub(crate) satpoint: Option<SatPoint>,
+  pub reinscribe: bool,
+  pub etch: Option<Etch>,
+  pub sat: Option<Sat>,
+  pub satpoint: Option<SatPoint>,
 }
 
 impl Batchfile {
@@ -134,9 +135,12 @@ impl Batchfile {
         entry.delegate,
         entry.metadata()?,
         entry.metaprotocol.clone(),
-        self.parent,
+        self.parent.into_iter().collect(),
         &entry.file,
         Some(pointer),
+        self
+          .etch
+          .and_then(|etch| (i == 0).then_some(etch.rune.rune)),
       )?);
 
       let postage = if self.mode == Mode::SatPoints {
@@ -197,7 +201,7 @@ mod tests {
 
   #[test]
   fn batchfile_not_sat_and_satpoint() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
@@ -223,7 +227,7 @@ inscriptions:
 
   #[test]
   fn batchfile_wrong_mode_for_satpoints() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
@@ -250,7 +254,7 @@ inscriptions:
 
   #[test]
   fn batchfile_missing_satpoint() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
@@ -276,7 +280,7 @@ inscriptions:
 
   #[test]
   fn batchfile_only_first_sat_of_outpoint() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
@@ -303,7 +307,7 @@ inscriptions:
 
   #[test]
   fn batchfile_no_postage_if_mode_satpoints() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
@@ -331,7 +335,7 @@ inscriptions:
 
   #[test]
   fn batchfile_no_duplicate_satpoints() {
-    let tempdir = tempfile::TempDir::new().unwrap();
+    let tempdir = TempDir::new().unwrap();
     let batch_file = tempdir.path().join("batch.yaml");
     fs::write(
       batch_file.clone(),
