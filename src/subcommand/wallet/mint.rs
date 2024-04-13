@@ -6,6 +6,13 @@ pub(crate) struct Mint {
   fee_rate: FeeRate,
   #[clap(long, help = "Mint <RUNE>. May contain `.` or `•`as spacers.")]
   rune: SpacedRune,
+  #[clap(
+    long,
+    help = "Include <AMOUNT> postage with mint output. [default: 10000sat]"
+  )]
+  postage: Option<Amount>,
+  #[clap(long, help = "Send minted runes to <DESTINATION>.")]
+  destination: Option<Address<NetworkUnchecked>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -19,33 +26,41 @@ impl Mint {
   pub(crate) fn run(self, wallet: Wallet) -> SubcommandResult {
     ensure!(
       wallet.has_rune_index(),
-      "`ord wallet etch` requires index created with `--index-runes` flag",
+      "`ord wallet mint` requires index created with `--index-runes` flag",
     );
 
     let rune = self.rune.rune;
 
     let bitcoin_client = wallet.bitcoin_client();
 
-    let block_height: u32 = bitcoin_client.get_block_count()?.try_into().unwrap();
-
-    let block_time = bitcoin_client
-      .get_block(&bitcoin_client.get_best_block_hash()?)?
-      .header
-      .time;
+    let block_height = bitcoin_client.get_block_count()?;
 
     let Some((id, rune_entry, _)) = wallet.get_rune(rune)? else {
       bail!("rune {rune} has not been etched");
     };
 
-    let limit = rune_entry
-      .mintable(Height(block_height), block_time)
-      .map_err(|e| anyhow!(e))?;
+    let postage = self.postage.unwrap_or(TARGET_POSTAGE);
 
-    let destination = wallet.get_change_address()?;
+    let amount = rune_entry
+      .mintable(block_height)
+      .map_err(|err| anyhow!("rune {rune} {err}"))?;
+
+    let chain = wallet.chain();
+
+    let destination = match self.destination {
+      Some(destination) => destination.require_network(chain.network())?,
+      None => wallet.get_change_address()?,
+    };
+
+    ensure!(
+      destination.script_pubkey().dust_value() < postage,
+      "postage below dust limit of {}sat",
+      destination.script_pubkey().dust_value().to_sat()
+    );
 
     let runestone = Runestone {
-      claim: Some(id),
-      ..Default::default()
+      mint: Some(id),
+      ..default()
     };
 
     let script_pubkey = runestone.encipher();
@@ -67,7 +82,7 @@ impl Mint {
         },
         TxOut {
           script_pubkey: destination.script_pubkey(),
-          value: TARGET_POSTAGE.to_sat(),
+          value: postage.to_sat(),
         },
       ],
     };
@@ -81,12 +96,19 @@ impl Mint {
       .sign_raw_transaction_with_wallet(&unsigned_transaction, None, None)?
       .hex;
 
+    let signed_transaction = consensus::encode::deserialize(&signed_transaction)?;
+
+    assert_eq!(
+      Runestone::decipher(&signed_transaction),
+      Some(Artifact::Runestone(runestone)),
+    );
+
     let transaction = bitcoin_client.send_raw_transaction(&signed_transaction)?;
 
     Ok(Some(Box::new(Output {
       rune: self.rune,
       pile: Pile {
-        amount: limit,
+        amount,
         divisibility: rune_entry.divisibility,
         symbol: rune_entry.symbol,
       },

@@ -94,10 +94,6 @@ pub(crate) trait PageContent: Display + 'static {
   {
     PageHtml::new(self, server_config)
   }
-
-  fn preview_image_url(&self) -> Option<Trusted<String>> {
-    None
-  }
 }
 
 #[cfg(test)]
@@ -126,7 +122,7 @@ mod tests {
         csp_origin: Some("https://signet.ordinals.com".into()),
         domain: Some("signet.ordinals.com".into()),
         index_sats: true,
-        ..Default::default()
+        ..default()
       }),),
       r"<!doctype html>
 <html lang=en>
@@ -176,7 +172,7 @@ mod tests {
         csp_origin: None,
         domain: None,
         index_sats: true,
-        ..Default::default()
+        ..default()
       })),
       r".*<nav>\s*<a href=/ title=home>Ordinals<sup>alpha</sup></a>.*"
     );
@@ -190,7 +186,7 @@ mod tests {
         csp_origin: None,
         domain: None,
         index_sats: false,
-        ..Default::default()
+        ..default()
       })),
       r".*<nav>\s*<a href=/ title=home>Ordinals<sup>alpha</sup></a>.*<a href=/clock title=clock>.*</a>\s*<form action=/search.*",
     );
@@ -204,7 +200,7 @@ mod tests {
         csp_origin: None,
         domain: None,
         index_sats: true,
-        ..Default::default()
+        ..default()
       })),
       r".*<nav>\s*<a href=/ title=home>Ordinals<sup>signet</sup></a>.*"
     );

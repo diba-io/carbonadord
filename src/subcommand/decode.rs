@@ -3,13 +3,13 @@ use super::*;
 #[derive(Serialize, Eq, PartialEq, Deserialize, Debug)]
 pub struct CompactOutput {
   pub inscriptions: Vec<CompactInscription>,
-  pub runestone: Option<Runestone>,
+  pub runestone: Option<Artifact>,
 }
 
 #[derive(Serialize, Eq, PartialEq, Deserialize, Debug)]
 pub struct RawOutput {
   pub inscriptions: Vec<ParsedEnvelope>,
-  pub runestone: Option<Runestone>,
+  pub runestone: Option<Artifact>,
 }
 
 #[derive(Serialize, Eq, PartialEq, Deserialize, Debug)]
@@ -77,14 +77,14 @@ impl Decode {
         .bitcoin_rpc_client(None)?
         .get_raw_transaction(&txid, None)?
     } else if let Some(file) = self.file {
-      Transaction::consensus_decode(&mut File::open(file)?)?
+      Transaction::consensus_decode(&mut fs::File::open(file)?)?
     } else {
       Transaction::consensus_decode(&mut io::stdin())?
     };
 
     let inscriptions = ParsedEnvelope::from_transaction(&transaction);
 
-    let runestone = Runestone::from_transaction(&transaction);
+    let runestone = Runestone::decipher(&transaction);
 
     if self.compact {
       Ok(Some(Box::new(CompactOutput {

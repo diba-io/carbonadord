@@ -1,13 +1,10 @@
 use {
   super::*,
   anyhow::ensure,
-  bitcoin::{
-    blockdata::{opcodes, script},
-    ScriptBuf,
-  },
+  bitcoin::blockdata::opcodes,
   brotli::enc::{writer::CompressorWriter, BrotliEncoderParams},
   http::header::HeaderValue,
-  io::{Cursor, Read, Write},
+  io::Write,
   std::str,
 };
 
@@ -28,86 +25,84 @@ pub struct Inscription {
 }
 
 impl Inscription {
-  #[cfg(test)]
-  pub(crate) fn new(content_type: Option<Vec<u8>>, body: Option<Vec<u8>>) -> Self {
-    Self {
-      content_type,
-      body,
-      ..Default::default()
-    }
-  }
-
-  pub(crate) fn from_file(
+  pub fn new(
     chain: Chain,
     compress: bool,
     delegate: Option<InscriptionId>,
     metadata: Option<Vec<u8>>,
     metaprotocol: Option<String>,
     parents: Vec<InscriptionId>,
-    path: impl AsRef<Path>,
+    path: Option<PathBuf>,
     pointer: Option<u64>,
     rune: Option<Rune>,
   ) -> Result<Self, Error> {
     let path = path.as_ref();
 
-    let body = fs::read(path).with_context(|| format!("io error reading {}", path.display()))?;
+    let (body, content_type, content_encoding) = if let Some(path) = path {
+      let body = fs::read(path).with_context(|| format!("io error reading {}", path.display()))?;
 
-    let (content_type, compression_mode) = Media::content_type_for_path(path)?;
+      let content_type = Media::content_type_for_path(path)?.0;
 
-    let (body, content_encoding) = if compress {
-      let mut compressed = Vec::new();
+      let (body, content_encoding) = if compress {
+        let compression_mode = Media::content_type_for_path(path)?.1;
+        let mut compressed = Vec::new();
 
-      {
-        CompressorWriter::with_params(
-          &mut compressed,
-          body.len(),
-          &BrotliEncoderParams {
-            lgblock: 24,
-            lgwin: 24,
-            mode: compression_mode,
-            quality: 11,
-            size_hint: body.len(),
-            ..Default::default()
-          },
-        )
-        .write_all(&body)?;
+        {
+          CompressorWriter::with_params(
+            &mut compressed,
+            body.len(),
+            &BrotliEncoderParams {
+              lgblock: 24,
+              lgwin: 24,
+              mode: compression_mode,
+              quality: 11,
+              size_hint: body.len(),
+              ..default()
+            },
+          )
+          .write_all(&body)?;
 
-        let mut decompressor = brotli::Decompressor::new(compressed.as_slice(), compressed.len());
+          let mut decompressor = brotli::Decompressor::new(compressed.as_slice(), compressed.len());
 
-        let mut decompressed = Vec::new();
+          let mut decompressed = Vec::new();
 
-        decompressor.read_to_end(&mut decompressed)?;
+          decompressor.read_to_end(&mut decompressed)?;
 
-        ensure!(decompressed == body, "decompression roundtrip failed");
-      }
+          ensure!(decompressed == body, "decompression roundtrip failed");
+        }
 
-      if compressed.len() < body.len() {
-        (compressed, Some("br".as_bytes().to_vec()))
+        if compressed.len() < body.len() {
+          (compressed, Some("br".as_bytes().to_vec()))
+        } else {
+          (body, None)
+        }
       } else {
         (body, None)
+      };
+
+      if let Some(limit) = chain.inscription_content_size_limit() {
+        let len = body.len();
+        if len > limit {
+          bail!("content size of {len} bytes exceeds {limit} byte limit for {chain} inscriptions");
+        }
       }
+
+      (Some(body), Some(content_type), content_encoding)
     } else {
-      (body, None)
+      (None, None, None)
     };
 
-    if let Some(limit) = chain.inscription_content_size_limit() {
-      let len = body.len();
-      if len > limit {
-        bail!("content size of {len} bytes exceeds {limit} byte limit for {chain} inscriptions");
-      }
-    }
-
     Ok(Self {
-      body: Some(body),
+      body,
       content_encoding,
-      content_type: Some(content_type.into()),
+      content_type: content_type.map(|content_type| content_type.into()),
       delegate: delegate.map(|delegate| delegate.value()),
       metadata,
       metaprotocol: metaprotocol.map(|metaprotocol| metaprotocol.into_bytes()),
       parents: parents.iter().map(|parent| parent.value()).collect(),
       pointer: pointer.map(Self::pointer_value),
       rune: rune.map(|rune| rune.commitment()),
-      ..Default::default()
+      ..default()
     })
   }
 
@@ -373,7 +368,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: None,
-        ..Default::default()
+        ..default()
       }
       .append_reveal_script(script::Builder::new())
       .instructions()
@@ -384,7 +379,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(Vec::new()),
-        ..Default::default()
+        ..default()
       }
       .append_reveal_script(script::Builder::new())
       .instructions()
@@ -395,7 +390,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(vec![0; 1]),
-        ..Default::default()
+        ..default()
       }
       .append_reveal_script(script::Builder::new())
       .instructions()
@@ -406,7 +401,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(vec![0; 520]),
-        ..Default::default()
+        ..default()
       }
       .append_reveal_script(script::Builder::new())
       .instructions()
@@ -417,7 +412,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(vec![0; 521]),
-        ..Default::default()
+        ..default()
       }
       .append_reveal_script(script::Builder::new())
       .instructions()
@@ -430,7 +425,7 @@ mod tests {
   fn inscription_with_no_parent_field_has_no_parent() {
     assert!(Inscription {
       parents: Vec::new(),
-      ..Default::default()
+      ..default()
     }
     .parents()
     .is_empty());
@@ -440,7 +435,7 @@ mod tests {
   fn inscription_with_parent_field_shorter_than_txid_length_has_no_parent() {
     assert!(Inscription {
       parents: vec![Vec::new()],
-      ..Default::default()
+      ..default()
     }
     .parents()
     .is_empty());
@@ -450,7 +445,7 @@ mod tests {
   fn inscription_with_parent_field_longer_than_txid_and_index_has_no_parent() {
     assert!(Inscription {
       parents: vec![vec![1; 37]],
-      ..Default::default()
+      ..default()
     }
     .parents()
     .is_empty());
@@ -464,7 +459,7 @@ mod tests {
 
     assert!(!Inscription {
       parents: vec![parent],
-      ..Default::default()
+      ..default()
     }
     .parents()
     .is_empty());
@@ -478,7 +473,7 @@ mod tests {
 
     assert!(Inscription {
       parents: vec![parent],
-      ..Default::default()
+      ..default()
     }
     .parents()
     .is_empty());
@@ -493,7 +488,7 @@ mod tests {
           0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
           0x1e, 0x1f,
         ]),
-        ..Default::default()
+        ..default()
       }
       .delegate()
       .unwrap()
@@ -513,7 +508,7 @@ mod tests {
           0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
           0x1e, 0x1f,
         ]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -529,7 +524,7 @@ mod tests {
     assert_eq!(
       Inscription {
         parents: vec![vec![1; 32]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -549,7 +544,7 @@ mod tests {
           0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
           0xff, 0xff, 0x01
         ]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -569,7 +564,7 @@ mod tests {
           0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
           0xff, 0xff, 0x01, 0x02
         ]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -589,7 +584,7 @@ mod tests {
           0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
           0xff, 0xff, 0x01, 0x02, 0x03
         ]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -609,7 +604,7 @@ mod tests {
           0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
           0xff, 0xff, 0x01, 0x02, 0x03, 0x04,
         ]],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -636,7 +631,7 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0x00, 0x02, 0x03, 0x04,
           ]
         ],
-        ..Default::default()
+        ..default()
       }
       .parents(),
       [
@@ -655,7 +650,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(vec![0x44, 0, 1, 2, 3]),
-        ..Default::default()
+        ..default()
       }
       .metadata()
       .unwrap(),
@@ -668,7 +663,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: None,
-        ..Default::default()
+        ..default()
       }
       .metadata(),
       None,
@@ -680,7 +675,7 @@ mod tests {
     assert_eq!(
       Inscription {
         metadata: Some(vec![0x44]),
-        ..Default::default()
+        ..default()
       }
       .metadata(),
       None,
@@ -692,7 +687,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: None,
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       None
@@ -700,7 +695,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![0]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       Some(0),
@@ -708,7 +703,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3, 4, 5, 6, 7, 8]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       Some(0x0807060504030201),
@@ -716,7 +711,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3, 4, 5, 6]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       Some(0x0000060504030201),
@@ -724,7 +719,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       Some(0x0807060504030201),
@@ -732,7 +727,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 1]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       None,
@@ -740,7 +735,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3, 4, 5, 6, 7, 8, 1]),
-        ..Default::default()
+        ..default()
       }
       .pointer(),
       None,
@@ -752,7 +747,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: None,
-        ..Default::default()
+        ..default()
       }
       .to_witness(),
       envelope(&[b"ord"]),
@@ -761,7 +756,7 @@ mod tests {
     assert_eq!(
       Inscription {
         pointer: Some(vec![1, 2, 3]),
-        ..Default::default()
+        ..default()
       }
       .to_witness(),
       envelope(&[b"ord", &[2], &[1, 2, 3]]),
@@ -774,14 +769,14 @@ mod tests {
 
     write!(file, "foo").unwrap();
 
-    let inscription = Inscription::from_file(
+    let inscription = Inscription::new(
       Chain::Mainnet,
       false,
       None,
       None,
       None,
       Vec::new(),
-      file.path(),
+      Some(file.path().to_path_buf()),
       None,
       None,
     )
@@ -789,14 +784,14 @@ mod tests {
 
     assert_eq!(inscription.pointer, None);
 
-    let inscription = Inscription::from_file(
+    let inscription = Inscription::new(
       Chain::Mainnet,
       false,
       None,
       None,
       None,
       Vec::new(),
-      file.path(),
+      Some(file.path().to_path_buf()),
       Some(0),
       None,
     )
@@ -804,14 +799,14 @@ mod tests {
 
     assert_eq!(inscription.pointer, Some(Vec::new()));
 
-    let inscription = Inscription::from_file(
+    let inscription = Inscription::new(
       Chain::Mainnet,
       false,
       None,
       None,
       None,
       Vec::new(),
-      file.path(),
+      Some(file.path().to_path_buf()),
       Some(1),
       None,
     )
@@ -819,14 +814,14 @@ mod tests {
 
     assert_eq!(inscription.pointer, Some(vec![1]));
 
-    let inscription = Inscription::from_file(
+    let inscription = Inscription::new(
       Chain::Mainnet,
       false,
       None,
       None,
       None,
       Vec::new(),
-      file.path(),
+      Some(file.path().to_path_buf()),
       Some(256),
       None,
     )
@@ -843,7 +838,7 @@ mod tests {
         Inscription {
           content_type: content_type.map(|content_type| content_type.as_bytes().into()),
           body: body.map(|content_type| content_type.as_bytes().into()),
-          ..Default::default()
+          ..default()
         }
         .hidden(),
         expected
@@ -900,7 +895,7 @@ mod tests {
     assert!(Inscription {
       content_type: Some("text/plain".as_bytes().into()),
       body: Some(b"{\xc3\x28}".as_slice().into()),
-      ..Default::default()
+      ..default()
     }
     .hidden());
 
@@ -908,7 +903,7 @@ mod tests {
       content_type: Some("text/html".as_bytes().into()),
       body: Some("hello".as_bytes().into()),
       metaprotocol: Some(Vec::new()),
-      ..Default::default()
+      ..default()
     }
     .hidden());
   }

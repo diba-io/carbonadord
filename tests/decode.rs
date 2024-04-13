@@ -60,14 +60,14 @@ fn from_file() {
         payload: Inscription {
           body: Some(vec![0, 1, 2, 3]),
           content_type: Some(b"text/plain;charset=utf-8".into()),
-          ..Default::default()
+          ..default()
         },
         input: 0,
         offset: 0,
         pushnum: false,
         stutter: false,
       }],
-      runestone: Some(Runestone::default()),
+      runestone: Some(Artifact::Runestone(Runestone::default())),
     },
   );
 }
@@ -83,39 +83,39 @@ fn from_stdin() {
         payload: Inscription {
           body: Some(vec![0, 1, 2, 3]),
           content_type: Some(b"text/plain;charset=utf-8".into()),
-          ..Default::default()
+          ..default()
         },
         input: 0,
         offset: 0,
         pushnum: false,
         stutter: false,
       }],
-      runestone: Some(Runestone::default()),
+      runestone: Some(Artifact::Runestone(Runestone::default())),
     },
   );
 }
 
 #[test]
 fn from_core() {
-  let bitcoin_rpc_server = test_bitcoincore_rpc::spawn();
-  let ord_rpc_server = TestServer::spawn(&bitcoin_rpc_server);
+  let core = mockcore::spawn();
+  let ord = TestServer::spawn(&core);
 
-  create_wallet(&bitcoin_rpc_server, &ord_rpc_server);
+  create_wallet(&core, &ord);
 
-  bitcoin_rpc_server.mine_blocks(1);
+  core.mine_blocks(1);
 
-  let (_inscription, reveal) = inscribe(&bitcoin_rpc_server, &ord_rpc_server);
+  let (_inscription, reveal) = inscribe(&core, &ord);
 
   pretty_assert_eq!(
     CommandBuilder::new(format!("decode --txid {reveal}"))
-      .bitcoin_rpc_server(&bitcoin_rpc_server)
+      .core(&core)
       .run_and_deserialize_output::<RawOutput>(),
     RawOutput {
       inscriptions: vec![Envelope {
         payload: Inscription {
           body: Some(b"FOO".into()),
           content_type: Some(b"text/plain;charset=utf-8".into()),
-          ..Default::default()
+          ..default()
         },
         input: 0,
         offset: 0,
@@ -146,7 +146,7 @@ fn compact() {
         pointer: None,
         unrecognized_even_field: false,
       }],
-      runestone: Some(Runestone::default()),
+      runestone: Some(Artifact::Runestone(Runestone::default())),
     },
   );
 }

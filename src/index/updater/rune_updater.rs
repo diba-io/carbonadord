@@ -1,30 +1,8 @@
-use {
-  super::*,
-  crate::runes::{Edict, Runestone},
-};
-
-struct Claim {
-  id: RuneId,
-  limit: u128,
-}
-
-struct Etched {
-  balance: u128,
-  divisibility: u8,
-  id: RuneId,
-  mint: Option<MintEntry>,
-  spaced_rune: SpacedRune,
-  symbol: Option<char>,
-}
-
-#[derive(Default)]
-pub(crate) struct RuneUpdate {
-  pub(crate) burned: u128,
-  pub(crate) mints: u64,
-  pub(crate) supply: u128,
-}
+use super::*;
 
 pub(super) struct RuneUpdater<'a, 'tx, 'client> {
+  pub(super) block_time: u32,
+  pub(super) burned: HashMap<RuneId, Lot>,
   pub(super) client: &'client Client,
   pub(super) height: u32,
   pub(super) id_to_entry: &'a mut Table<'tx, RuneIdValue, RuneEntryValue>,
@@ -35,69 +13,55 @@ pub(super) struct RuneUpdater<'a, 'tx, 'client> {
   pub(super) runes: u64,
   pub(super) sequence_number_to_rune_id: &'a mut Table<'tx, u32, RuneIdValue>,
   pub(super) statistic_to_count: &'a mut Table<'tx, u64, u64>,
-  pub(super) block_time: u32,
   pub(super) transaction_id_to_rune: &'a mut Table<'tx, &'static TxidValue, u128>,
-  pub(super) updates: HashMap<RuneId, RuneUpdate>,
 }
 
 impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
   pub(super) fn index_runes(&mut self, tx_index: u32, tx: &Transaction, txid: Txid) -> Result<()> {
-    let runestone = Runestone::from_transaction(tx);
+    let artifact = Runestone::decipher(tx);
 
     let mut unallocated = self.unallocated(tx)?;
 
-    let cenotaph = runestone
-      .as_ref()
-      .map(|runestone| runestone.cenotaph)
-      .unwrap_or_default();
+    let mut allocated: Vec<HashMap<RuneId, Lot>> = vec![HashMap::new(); tx.output.len()];
 
-    let default_output = runestone
-      .as_ref()
-      .and_then(|runestone| runestone.default_output);
-
-    let mut allocated: Vec<HashMap<RuneId, u128>> = vec![HashMap::new(); tx.output.len()];
-
-    if let Some(runestone) = runestone {
-      if let Some(claim) = runestone
-        .claim
-        .and_then(|id| self.claim(id).transpose())
-        .transpose()?
-      {
-        *unallocated.entry(claim.id).or_default() += claim.limit;
-
-        let update = self.updates.entry(claim.id).or_default();
-
-        update.mints += 1;
-        update.supply += claim.limit;
+    if let Some(artifact) = &artifact {
+      if let Some(id) = artifact.mint() {
+        if let Some(amount) = self.mint(id)? {
+          *unallocated.entry(id).or_default() += amount;
+        }
       }
 
-      let mut etched = self.etched(tx_index, tx, &runestone)?;
+      let etched = self.etched(tx_index, tx, artifact)?;
 
-      if !cenotaph {
-        for Edict { id, amount, output } in runestone.edicts {
+      if let Artifact::Runestone(runestone) = artifact {
+        if let Some((id, ..)) = etched {
+          *unallocated.entry(id).or_default() +=
+            runestone.etching.unwrap().premine.unwrap_or_default();
+        }
+
+        for Edict { id, amount, output } in runestone.edicts.iter().copied() {
+          let amount = Lot(amount);
+
           // edicts with output values greater than the number of outputs
           // should never be produced by the edict parser
           let output = usize::try_from(output).unwrap();
           assert!(output <= tx.output.len());
 
-          let (balance, id) = if id == RuneId::default() {
-            // If this edict allocates new issuance runes, skip it
-            // if no issuance was present, or if the issuance was invalid.
-            // Additionally, replace ID 0 with the newly assigned ID, and
-            // get the unallocated balance of the issuance.
-            match etched.as_mut() {
-              Some(Etched { balance, id, .. }) => (balance, *id),
-              None => continue,
-            }
+          let id = if id == RuneId::default() {
+            let Some((id, ..)) = etched else {
+              continue;
+            };
+
+            id
           } else {
-            // Get the unallocated balance of the given ID
-            match unallocated.get_mut(&id) {
-              Some(balance) => (balance, id),
-              None => continue,
-            }
+            id
           };
 
-          let mut allocate = |balance: &mut u128, amount: u128, output: usize| {
+          let Some(balance) = unallocated.get_mut(&id) else {
+            continue;
+          };
+
+          let mut allocate = |balance: &mut Lot, amount: Lot, output: usize| {
             if amount > 0 {
               *balance -= amount;
               *allocated[output].entry(id).or_default() += amount;
@@ -146,24 +110,31 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
         }
       }
 
-      if let Some(etched) = etched {
-        self.create_rune_entry(txid, cenotaph, etched)?;
+      if let Some((id, rune)) = etched {
+        self.create_rune_entry(txid, artifact, id, rune)?;
       }
     }
 
-    let mut burned: HashMap<RuneId, u128> = HashMap::new();
+    let mut burned: HashMap<RuneId, Lot> = HashMap::new();
 
-    if cenotaph {
+    if let Some(Artifact::Cenotaph(_)) = artifact {
       for (id, balance) in unallocated {
         *burned.entry(id).or_default() += balance;
       }
     } else {
+      let pointer = artifact
+        .map(|artifact| match artifact {
+          Artifact::Runestone(runestone) => runestone.pointer,
+          Artifact::Cenotaph(_) => unreachable!(),
+        })
+        .unwrap_or_default();
+
       // assign all un-allocated runes to the default output, or the first non
       // OP_RETURN output if there is no default, or if the default output is
       // too large
-      if let Some(vout) = default_output
-        .map(|vout| vout.into_usize())
-        .filter(|vout| *vout < allocated.len())
+      if let Some(vout) = pointer
+        .map(|pointer| pointer.into_usize())
+        .inspect(|&pointer| assert!(pointer < allocated.len()))
         .or_else(|| {
           tx.output
             .iter()
@@ -196,20 +167,20 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
       // increment burned balances
       if tx.output[vout].script_pubkey.is_op_return() {
         for (id, balance) in &balances {
-          *burned.entry(*id).or_default() += balance;
+          *burned.entry(*id).or_default() += *balance;
         }
         continue;
       }
 
       buffer.clear();
 
-      let mut balances = balances.into_iter().collect::<Vec<(RuneId, u128)>>();
+      let mut balances = balances.into_iter().collect::<Vec<(RuneId, Lot)>>();
 
       // Sort balances by id so tests can assert balances in a fixed order
       balances.sort();
 
       for (id, balance) in balances {
-        id.encode_balance(balance, &mut buffer);
+        Index::encode_rune_balance(id, balance.n(), &mut buffer);
       }
 
       self.outpoint_to_balances.insert(
@@ -224,53 +195,88 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
 
     // increment entries with burned runes
     for (id, amount) in burned {
-      self.updates.entry(id).or_default().burned += amount;
+      *self.burned.entry(id).or_default() += amount;
     }
 
     Ok(())
   }
 
-  fn create_rune_entry(&mut self, txid: Txid, burn: bool, etched: Etched) -> Result {
-    let Etched {
-      balance,
-      divisibility,
-      id,
-      mint,
-      spaced_rune,
-      symbol,
-    } = etched;
+  pub(super) fn update(self) -> Result {
+    for (rune_id, burned) in self.burned {
+      let mut entry = RuneEntry::load(self.id_to_entry.get(&rune_id.store())?.unwrap().value());
+      entry.burned = entry.burned.checked_add(burned.n()).unwrap();
+      self.id_to_entry.insert(&rune_id.store(), entry.store())?;
+    }
 
-    self.rune_to_id.insert(spaced_rune.rune.0, id.store())?;
+    Ok(())
+  }
+
+  fn create_rune_entry(
+    &mut self,
+    txid: Txid,
+    artifact: &Artifact,
+    id: RuneId,
+    rune: Rune,
+  ) -> Result {
+    self.rune_to_id.insert(rune.store(), id.store())?;
     self
       .transaction_id_to_rune
-      .insert(&txid.store(), spaced_rune.rune.0)?;
+      .insert(&txid.store(), rune.store())?;
 
     let number = self.runes;
     self.runes += 1;
-
-    let premine = u128::MAX - balance;
 
     self
       .statistic_to_count
       .insert(&Statistic::Runes.into(), self.runes)?;
 
-    self.id_to_entry.insert(
-      id.store(),
-      RuneEntry {
+    let entry = match artifact {
+      Artifact::Cenotaph(_) => RuneEntry {
+        block: id.block,
         burned: 0,
-        divisibility,
+        divisibility: 0,
         etching: txid,
-        mint: mint.and_then(|mint| (!burn).then_some(mint)),
+        terms: None,
         mints: 0,
         number,
-        premine,
-        spaced_rune,
-        supply: premine,
-        symbol,
-        timestamp: self.block_time,
+        premine: 0,
+        spaced_rune: SpacedRune { rune, spacers: 0 },
+        symbol: None,
+        timestamp: self.block_time.into(),
+        turbo: false,
+      },
+      Artifact::Runestone(Runestone { etching, .. }) => {
+        let Etching {
+          divisibility,
+          terms,
+          premine,
+          spacers,
+          symbol,
+          turbo,
+          ..
+        } = etching.unwrap();
+
+        RuneEntry {
+          block: id.block,
+          burned: 0,
+          divisibility: divisibility.unwrap_or_default(),
+          etching: txid,
+          terms,
+          mints: 0,
+          number,
+          premine: premine.unwrap_or_default(),
+          spaced_rune: SpacedRune {
+            rune,
+            spacers: spacers.unwrap_or_default(),
+          },
+          symbol,
+          timestamp: self.block_time.into(),
+          turbo,
+        }
       }
-      .store(),
-    )?;
+    };
+
+    self.id_to_entry.insert(id.store(), entry.store())?;
 
     let inscription_id = InscriptionId { txid, index: 0 };
 
@@ -290,13 +296,20 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
     &mut self,
     tx_index: u32,
     tx: &Transaction,
-    runestone: &Runestone,
-  ) -> Result<Option<Etched>> {
-    let Some(etching) = runestone.etching else {
-      return Ok(None);
+    artifact: &Artifact,
+  ) -> Result<Option<(RuneId, Rune)>> {
+    let rune = match artifact {
+      Artifact::Runestone(runestone) => match runestone.etching {
+        Some(etching) => etching.rune,
+        None => return Ok(None),
+      },
+      Artifact::Cenotaph(cenotaph) => match cenotaph.etching {
+        Some(rune) => Some(rune),
+        None => return Ok(None),
+      },
     };
 
-    let rune = if let Some(rune) = etching.rune {
+    let rune = if let Some(rune) = rune {
       if rune < self.minimum
         || rune.is_reserved()
         || self.rune_to_id.get(rune.0)?.is_some()
@@ -316,41 +329,36 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
         .statistic_to_count
         .insert(&Statistic::ReservedRunes.into(), reserved_runes + 1)?;
 
-      Rune::reserved(reserved_runes.into())
+      Rune::reserved(self.height.into(), tx_index)
     };
 
-    Ok(Some(Etched {
-      balance: u128::MAX,
-      divisibility: etching.divisibility,
-      id: RuneId {
-        block: self.height,
+    Ok(Some((
+      RuneId {
+        block: self.height.into(),
         tx: tx_index,
       },
-      spaced_rune: SpacedRune {
-        rune,
-        spacers: etching.spacers,
-      },
-      symbol: etching.symbol,
-      mint: etching.mint.map(|mint| MintEntry {
-        deadline: mint.deadline,
-        end: mint.term.map(|term| term + self.height),
-        limit: mint.limit.map(|limit| limit.min(runes::MAX_LIMIT)),
-      }),
-    }))
+      rune,
+    )))
   }
 
-  fn claim(&self, id: RuneId) -> Result<Option<Claim>> {
+  fn mint(&mut self, id: RuneId) -> Result<Option<Lot>> {
     let Some(entry) = self.id_to_entry.get(&id.store())? else {
       return Ok(None);
     };
 
-    let rune_entry = RuneEntry::load(entry.value());
+    let mut rune_entry = RuneEntry::load(entry.value());
 
-    let Ok(limit) = rune_entry.mintable(Height(self.height), self.block_time) else {
+    let Ok(amount) = rune_entry.mintable(self.height.into()) else {
       return Ok(None);
     };
 
-    Ok(Some(Claim { id, limit }))
+    drop(entry);
+
+    rune_entry.mints += 1;
+
+    self.id_to_entry.insert(&id.store(), rune_entry.store())?;
+
+    Ok(Some(Lot(amount)))
   }
 
   fn tx_commits_to_rune(&self, tx: &Transaction, rune: Rune) -> Result<bool> {
@@ -365,7 +373,10 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
       };
 
       for instruction in tapscript.instructions() {
-        let instruction = instruction?;
+        // ignore errors, since the extracted script may not be valid
+        let Ok(instruction) = instruction else {
+          break;
+        };
 
         let Some(pushbytes) = instruction.push_bytes() else {
           continue;
@@ -380,7 +391,10 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
           .get_raw_transaction_info(&input.previous_output.txid, None)
           .into_option()?
         else {
-          panic!("input not in UTXO set: {}", input.previous_output);
+          panic!(
+            "can't get input transaction: {}",
+            input.previous_output.txid
+          );
         };
 
         let taproot = tx_info.vout[input.previous_output.vout.into_usize()]
@@ -388,12 +402,24 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
           .script()?
           .is_v1_p2tr();
 
-        let mature = tx_info
-          .confirmations
-          .map(|confirmations| confirmations >= RUNE_COMMIT_INTERVAL)
-          .unwrap_or_default();
+        if !taproot {
+          continue;
+        }
 
-        if taproot && mature {
+        let commit_tx_height = self
+          .client
+          .get_block_header_info(&tx_info.blockhash.unwrap())
+          .into_option()?
+          .unwrap()
+          .height;
+
+        let confirmations = self
+          .height
+          .checked_sub(commit_tx_height.try_into().unwrap())
+          .unwrap()
+          + 1;
+
+        if confirmations >= Runestone::COMMIT_CONFIRMATIONS.into() {
           return Ok(true);
         }
       }
@@ -402,9 +428,9 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
     Ok(false)
   }
 
-  fn unallocated(&mut self, tx: &Transaction) -> Result<HashMap<RuneId, u128>> {
+  fn unallocated(&mut self, tx: &Transaction) -> Result<HashMap<RuneId, Lot>> {
     // map of rune ID to un-allocated balance of that rune
-    let mut unallocated: HashMap<RuneId, u128> = HashMap::new();
+    let mut unallocated: HashMap<RuneId, Lot> = HashMap::new();
 
     // increment unallocated runes with the runes in tx inputs
     for input in &tx.input {
@@ -415,7 +441,7 @@ impl<'a, 'tx, 'client> RuneUpdater<'a, 'tx, 'client> {
         let buffer = guard.value();
         let mut i = 0;
         while i < buffer.len() {
-          let ((id, balance), len) = RuneId::decode_balance(&buffer[i..]).unwrap();
+          let ((id, balance), len) = Index::decode_rune_balance(&buffer[i..]).unwrap();
           i += len;
           *unallocated.entry(id).or_default() += balance;
         }
