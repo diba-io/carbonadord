@@ -25,10 +25,8 @@ pub struct Output {
 #[derive(Deserialize)]
 pub struct MintRequest {
   rune: SpacedRune,
-  destination: Address<NetworkUnchecked>,
-  change: Address<NetworkUnchecked>,
-  change_amount: u64,
-  postage: u64,
+  // destination: Address<NetworkUnchecked>,
+  // postage: u64,
 }
 
 impl Mint {
@@ -61,22 +59,21 @@ impl Mint {
       bail!("rune {rune} has not been etched");
     };
 
-    let postage = Amount::from_sat(mint_req.postage);
+    // let postage = Amount::from_sat(mint_req.postage);
 
     let amount = rune_entry
       .mintable(block_height)
       .map_err(|err| anyhow!("rune {rune} {err}"))?;
 
-    let chain = wallet.chain();
+    // let chain = wallet.chain();
 
-    let destination = mint_req.destination.require_network(chain.network())?;
-    let change = mint_req.change.require_network(chain.network())?;
+    // let destination = mint_req.destination.require_network(chain.network())?;
 
-    ensure!(
-      destination.script_pubkey().dust_value() < postage,
-      "postage below dust limit of {}sat",
-      destination.script_pubkey().dust_value().to_sat()
-    );
+    // ensure!(
+    //   destination.script_pubkey().dust_value() < postage,
+    //   "postage below dust limit of {}sat",
+    //   destination.script_pubkey().dust_value().to_sat()
+    // );
 
     let runestone = Runestone {
       mint: Some(id),
@@ -92,29 +89,25 @@ impl Mint {
     //   script_pubkey.len()
     // );
 
-    let unfunded_transaction = Transaction {
-      version: 2,
-      lock_time: LockTime::ZERO,
-      input: Vec::new(),
-      output: vec![
-        TxOut {
-          script_pubkey,
-          value: 0,
-        },
-        TxOut {
-          script_pubkey: destination.script_pubkey(),
-          value: mint_req.postage,
-        },
-        TxOut {
-          script_pubkey: change.script_pubkey(),
-          value: mint_req.change_amount,
-        },
-      ],
-    };
+    // let unfunded_transaction = Transaction {
+    //   version: 2,
+    //   lock_time: LockTime::ZERO,
+    //   input: Vec::new(),
+    //   output: vec![
+    //     TxOut {
+    //       script_pubkey,
+    //       value: 0,
+    //     },
+    //     TxOut {
+    //       script_pubkey: destination.script_pubkey(),
+    //       value: mint_req.postage,
+    //     },
+    //   ],
+    // };
 
     // unfunded_transaction.raw_hex();
 
-    let psbt = consensus::encode::serialize_hex(&unfunded_transaction);
+    // let psbt = consensus::encode::serialize_hex(&unfunded_transaction);
 
     // wallet.lock_non_cardinal_outputs()?;
 
@@ -141,7 +134,7 @@ impl Mint {
         divisibility: rune_entry.divisibility,
         symbol: rune_entry.symbol,
       },
-      mint: psbt,
+      mint: script_pubkey.to_hex_string(),
     })
   }
 }
