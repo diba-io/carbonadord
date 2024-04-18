@@ -100,7 +100,7 @@ impl WalletCommand {
       Subcommand::Dump => dump::run(wallet),
       Subcommand::Inscribe(inscribe) => inscribe.run(wallet),
       Subcommand::Inscriptions => inscriptions::run(wallet),
-      Subcommand::Mint(mint) => mint.run(wallet),
+      Subcommand::Mint(_mint) => unreachable!("local mint unavailable"),
       Subcommand::Receive(receive) => receive.run(wallet),
       Subcommand::Resume => resume::run(wallet),
       Subcommand::Sats(sats) => sats.run(wallet),
