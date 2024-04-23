@@ -19,17 +19,37 @@ pub(crate) struct Mint {
 pub struct Output {
   pub rune: SpacedRune,
   pub pile: Pile,
-  pub mint: Txid,
+  pub mint: String,
+}
+
+#[derive(Deserialize)]
+pub struct MintRequest {
+  rune: SpacedRune,
+  // destination: Address<NetworkUnchecked>,
+  // postage: u64,
 }
 
 impl Mint {
-  pub(crate) fn run(self, wallet: Wallet) -> SubcommandResult {
+  pub(crate) fn post(mint_req: MintRequest) -> Result<Output> {
+    let settings = Settings::load(Options::default())?;
+
+    let wallet = WalletConstructor::construct(
+      "ord".to_owned(),
+      true,
+      settings.clone(),
+      settings
+        .server_url()
+        .unwrap_or("http://127.0.0.1:80")
+        .parse::<Url>()
+        .context("invalid server URL")?,
+    )?;
+
     ensure!(
       wallet.has_rune_index(),
       "`ord wallet mint` requires index created with `--index-runes` flag",
     );
 
-    let rune = self.rune.rune;
+    let rune = mint_req.rune.rune;
 
     let bitcoin_client = wallet.bitcoin_client();
 
@@ -39,24 +59,21 @@ impl Mint {
       bail!("rune {rune} has not been etched");
     };
 
-    let postage = self.postage.unwrap_or(TARGET_POSTAGE);
+    // let postage = Amount::from_sat(mint_req.postage);
 
     let amount = rune_entry
       .mintable(block_height + 1)
       .map_err(|err| anyhow!("rune {rune} {err}"))?;
 
-    let chain = wallet.chain();
+    // let chain = wallet.chain();
 
-    let destination = match self.destination {
-      Some(destination) => destination.require_network(chain.network())?,
-      None => wallet.get_change_address()?,
-    };
+    // let destination = mint_req.destination.require_network(chain.network())?;
 
-    ensure!(
-      destination.script_pubkey().dust_value() < postage,
-      "postage below dust limit of {}sat",
-      destination.script_pubkey().dust_value().to_sat()
-    );
+    // ensure!(
+    //   destination.script_pubkey().dust_value() < postage,
+    //   "postage below dust limit of {}sat",
+    //   destination.script_pubkey().dust_value().to_sat()
+    // );
 
     let runestone = Runestone {
       mint: Some(id),
@@ -65,54 +82,59 @@ impl Mint {
 
     let script_pubkey = runestone.encipher();
 
-    ensure!(
-      script_pubkey.len() <= 82,
-      "runestone greater than maximum OP_RETURN size: {} > 82",
-      script_pubkey.len()
-    );
+    // Libre Relay exempts this
+    // ensure!(
+    //   script_pubkey.len() <= 82,
+    //   "runestone greater than maximum OP_RETURN size: {} > 82",
+    //   script_pubkey.len()
+    // );
 
-    let unfunded_transaction = Transaction {
-      version: 2,
-      lock_time: LockTime::ZERO,
-      input: Vec::new(),
-      output: vec![
-        TxOut {
-          script_pubkey,
-          value: 0,
-        },
-        TxOut {
-          script_pubkey: destination.script_pubkey(),
-          value: postage.to_sat(),
-        },
-      ],
-    };
+    // let unfunded_transaction = Transaction {
+    //   version: 2,
+    //   lock_time: LockTime::ZERO,
+    //   input: Vec::new(),
+    //   output: vec![
+    //     TxOut {
+    //       script_pubkey,
+    //       value: 0,
+    //     },
+    //     TxOut {
+    //       script_pubkey: destination.script_pubkey(),
+    //       value: mint_req.postage,
+    //     },
+    //   ],
+    // };
 
-    wallet.lock_non_cardinal_outputs()?;
+    // unfunded_transaction.raw_hex();
 
-    let unsigned_transaction =
-      fund_raw_transaction(bitcoin_client, self.fee_rate, &unfunded_transaction)?;
+    // let psbt = consensus::encode::serialize_hex(&unfunded_transaction);
 
-    let signed_transaction = bitcoin_client
-      .sign_raw_transaction_with_wallet(&unsigned_transaction, None, None)?
-      .hex;
+    // wallet.lock_non_cardinal_outputs()?;
 
-    let signed_transaction = consensus::encode::deserialize(&signed_transaction)?;
+    // let unsigned_transaction =
+    //   fund_raw_transaction(bitcoin_client, self.fee_rate, &unfunded_transaction)?;
 
-    assert_eq!(
-      Runestone::decipher(&signed_transaction),
-      Some(Artifact::Runestone(runestone)),
-    );
+    // let signed_transaction = bitcoin_client
+    //   .sign_raw_transaction_with_wallet(&unsigned_transaction, None, None)?
+    //   .hex;
 
-    let transaction = bitcoin_client.send_raw_transaction(&signed_transaction)?;
+    // let signed_transaction = consensus::encode::deserialize(&signed_transaction)?;
 
-    Ok(Some(Box::new(Output {
-      rune: self.rune,
+    // assert_eq!(
+    //   Runestone::decipher(&signed_transaction),
+    //   Some(Artifact::Runestone(runestone)),
+    // );
+
+    // let transaction = bitcoin_client.send_raw_transaction(&signed_transaction)?;
+
+    Ok(Output {
+      rune: mint_req.rune,
       pile: Pile {
         amount,
         divisibility: rune_entry.divisibility,
         symbol: rune_entry.symbol,
       },
-      mint: transaction,
-    })))
+      mint: script_pubkey.to_hex_string(),
+    })
   }
 }

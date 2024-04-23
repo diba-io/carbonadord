@@ -3,6 +3,7 @@ use {
     accept_encoding::AcceptEncoding,
     accept_json::AcceptJson,
     error::{OptionExt, ServerError, ServerResult},
+    wallet::mint,
   },
   super::*,
   crate::templates::{
@@ -40,6 +41,8 @@ use {
 };
 
 pub(crate) use server_config::ServerConfig;
+
+use crate::subcommand::wallet::mint::MintRequest;
 
 mod accept_encoding;
 mod accept_json;
@@ -254,6 +257,7 @@ impl Server {
         .route("/rare.txt", get(Self::rare_txt))
         .route("/rune/:rune", get(Self::rune))
         .route("/runes", get(Self::runes))
+        .route("/runes/mint", post(Self::runes_mint))
         .route("/runes/:page", get(Self::runes_paginated))
         .route("/runes/balances", get(Self::runes_balances))
         .route("/sat/:sat", get(Self::sat))
@@ -710,6 +714,15 @@ impl Server {
       accept_json,
     )
     .await
+  }
+
+  async fn runes_mint(
+    // Extension(server_config): Extension<Arc<ServerConfig>>,
+    // Extension(index): Extension<Arc<Index>>,
+    // AcceptJson(accept_json): AcceptJson,
+    Json(mint_req): Json<MintRequest>,
+  ) -> ServerResult {
+    task::block_in_place(|| Ok(Json(mint::Mint::post(mint_req)?).into_response()))
   }
 
   async fn runes_paginated(

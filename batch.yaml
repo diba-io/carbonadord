@@ -8,13 +8,13 @@
 mode: separate-outputs
 
 # parent inscription:
-parent: 6ac5cacb768794f4fd7a78bf00f2074891fce68bd65c4ff36e77177237aacacai0
+# parent: 6ac5cacb768794f4fd7a78bf00f2074891fce68bd65c4ff36e77177237aacacai0
 
 # postage for each inscription:
-postage: 12345
+postage: 888
 
 # allow reinscribing
-reinscribe: true
+reinscribe: false
 
 # sat to inscribe on, can only be used with `same-sat`:
 # sat: 5000000000
@@ -22,60 +22,63 @@ reinscribe: true
 # rune to etch (optional)
 etching:
   # rune name
-  rune: THE•BEST•RUNE
+  rune: MEOW.MEOW.MEOW
   # allow subdividing super-unit into `10^divisibility` sub-units
-  divisibility: 2
+  divisibility: 8
   # premine
-  premine: 1000.00
+  premine: 7920000000.00000000
   # total supply, must be equal to `premine + terms.cap * terms.amount`
-  supply: 10000.00
+  supply: 8000000000.00000000
   # currency symbol
-  symbol: $
+  symbol: 😸
   # mint terms (optional)
   terms:
     # amount per mint
-    amount: 100.00
+    amount: 800.00000000
     # maximum number of mints
-    cap: 90
+    cap: 100000 # H: 4B / 8K
     # mint start and end absolute block height (optional)
     height:
       start: 840000
-      end: 850000
+      end: 876208
     # mint start and end block height relative to etching height (optional)
-    offset:
-      start: 1000
-      end: 9000
+    # offset:
+    #   start: 1000
+    #   end: 9000
   # future runes protocol changes may be opt-in. this may be for a variety of
   # reasons, including that they make light client validation harder, or simply
   # because they are too degenerate.
   #
   # setting `turbo` to `true` opts in to these future protocol changes,
   # whatever they may be.
-  turbo: true
+  turbo: true # H: Because it's a meme token, more features are better
 
 # inscriptions to inscribe
 inscriptions:
-  # path to inscription content
-- file: mango.avif
-  # inscription to delegate content to (optional)
-  delegate: 6ac5cacb768794f4fd7a78bf00f2074891fce68bd65c4ff36e77177237aacacai0
-  # destination (optional, if no destination is specified a new wallet change address will be used)
-  destination: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
-  # inscription metadata (optional)
-  metadata:
-    title: Delicious Mangos
-    description: >
-      Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam semper,
-      ligula ornare laoreet tincidunt, odio nisi euismod tortor, vel blandit
-      metus est et odio. Nullam venenatis, urna et molestie vestibulum, orci
-      mi efficitur risus, eu malesuada diam lorem sed velit. Nam fermentum
-      dolor et luctus euismod.
+#   # path to inscription content
+# - file: mango.avif
+#   # inscription to delegate content to (optional)
+#   delegate: 6ac5cacb768794f4fd7a78bf00f2074891fce68bd65c4ff36e77177237aacacai0
+#   # destination (optional, if no destination is specified a new wallet change address will be used)
+#   destination: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
+#   # inscription metadata (optional)
+#   metadata:
+#     title: Delicious Mangos
+#     description: >
+#       Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam semper,
+#       ligula ornare laoreet tincidunt, odio nisi euismod tortor, vel blandit
+#       metus est et odio. Nullam venenatis, urna et molestie vestibulum, orci
+#       mi efficitur risus, eu malesuada diam lorem sed velit. Nam fermentum
+#       dolor et luctus euismod.
 
-- file: token.json
-  # inscription metaprotocol (optional)
-  metaprotocol: DOPEPROTOCOL-42069
+# - file: token.json
+#   # inscription metaprotocol (optional)
+#   metaprotocol: DOPEPROTOCOL-42069
 
-- file: tulip.png
-  destination: bc1pdqrcrxa8vx6gy75mfdfj84puhxffh4fq46h3gkp6jxdd0vjcsdyspfxcv6
+- file: diba192.png
+  destination: bc1pwnaljnawhxm0g5jamc898uj0whklzf55qw72zsxrrp4e6aggrvaqv0tssk
   metadata:
-    author: Satoshi Nakamoto
+    author: BitMask Foundation
+    caption: MEOW etch - 1% Runes, 99% RGB - 99% of Runes burnt to Satoshi's address
+
+# H: batchfile must contain at least one inscription
