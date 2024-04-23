@@ -62,7 +62,7 @@ impl Mint {
     // let postage = Amount::from_sat(mint_req.postage);
 
     let amount = rune_entry
-      .mintable(block_height)
+      .mintable(block_height + 1)
       .map_err(|err| anyhow!("rune {rune} {err}"))?;
 
     // let chain = wallet.chain();
